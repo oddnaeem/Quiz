@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>অ্যাডমিন ড্যাশবোর্ড</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="top" hidden>
+  <h1>অ্যাডমিন ড্যাশবোর্ড</h1>
+  <button class="s" onclick="location.href='index.html'">এডিটর</button>
+  <button class="s" onclick="signOut()">লগআউট</button>
+</header>
+<main>
+  <section id="login" class="card" hidden style="margin-top:12vh">
+    <h1 style="margin:0 0 4px;font-size:22px">অ্যাডমিন লগইন</h1>
+    <label for="em">ইমেইল</label><input id="em" type="email" autocomplete="username">
+    <label for="pw">পাসওয়ার্ড</label><input id="pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')signIn()">
+    <div class="err" id="lerr"></div>
+    <button class="p" style="margin-top:12px;width:100%" onclick="signIn()">লগইন</button>
+  </section>
+
+  <section id="deny" class="card" hidden>
+    <b>শুধু অ্যাডমিনদের জন্য</b>
+    <div class="sub" style="margin:6px 0 12px">এই একাউন্টে অ্যাডমিন অনুমতি নেই।</div>
+    <button onclick="location.href='index.html'">এডিটরে যান</button>
+    <button onclick="signOut()">লগআউট</button>
+  </section>
+
+  <section id="app" hidden>
+    <div class="row" style="margin-bottom:12px">
+      <button id="t_sets" class="p" onclick="tab('sets')">সেট</button>
+      <button id="t_users" onclick="tab('users')">ইউজার <span id="ucnt"></span></button>
+    </div>
+    <div id="p_sets">
+      <select id="flt" onchange="loadSets()" style="margin-bottom:12px">
+        <option value="review">রিভিউতে থাকা</option>
+        <option value="published">প্রকাশিত</option>
+        <option value="rejected">ফেরত দেওয়া</option>
+        <option value="draft">ড্রাফট</option>
+        <option value="all">সব</option>
+      </select>
+      <div id="slist"></div>
+    </div>
+    <div id="p_users" hidden><div id="ulist"></div></div>
+  </section>
+</main>
+<div id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="common.js"></script>
+<script>
+function view(v){['login','deny','app'].forEach(x=>$('#'+x).hidden=x!==v);$('#top').hidden=v==='login'}
+async function init(){const {data}=await sb.auth.getSession();data.session?enter():view('login')}
+async function signIn(){
+  const {error}=await sb.auth.signInWithPassword({email:$('#em').value.trim(),password:$('#pw').value});
+  if(error){$('#lerr').textContent='লগইন হয়নি: '+error.message;return}
+  $('#lerr').textContent='';enter();
+}
+async function signOut(){await sb.auth.signOut();view('login')}
+async function enter(){
+  const me=await getProfile();
+  if(!me||me.role!=='admin')return view('deny');
+  view('app');tab('sets');pend();
+}
+function tab(t){
+  ['sets','users'].forEach(x=>{$('#p_'+x).hidden=x!==t;$('#t_'+x).classList.toggle('p',x===t)});
+  t==='sets'?loadSets():loadUsers();
+}
+async function pend(){
+  const {count}=await sb.from('profiles').select('id',{count:'exact',head:true}).eq('role','pending');
+  $('#ucnt').textContent=count?`(${count})`:'';
+}
+
+// ---------- সেট রিভিউ ----------
+async function loadSets(){
+  const f=$('#flt').value;
+  let q=sb.from('quiz_sets').select('*, questions(count), owner:profiles(email)').order('updated_at',{ascending:false});
+  if(f!=='all')q=q.eq('status',f);
+  const {data,error}=await q;if(error)return fail(error);
+  $('#slist').innerHTML=data.length?data.map(s=>`
+    <div class="card">
+      <div class="row"><b class="grow">${esc(s.title)}</b><span class="pill ${s.status==='published'?'on':''}">${ST[s.status]}</span></div>
+      <div class="sub">${esc(s.owner?.email||'')} · ${s.questions[0].count}টি প্রশ্ন · ${s.duration} মিনিট</div>
+      ${s.status==='rejected'&&s.review_note?`<div class="sub">নোট: ${esc(s.review_note)}</div>`:''}
+      <div class="row" style="margin-top:8px">
+        <button class="s" onclick="peek('${s.id}')">প্রশ্ন দেখুন</button>
+        ${s.status==='review'?`<button class="s p" onclick="setSt('${s.id}','published')">অনুমোদন</button>
+          <button class="s d" onclick="reject('${s.id}')">ফেরত দিন</button>`:''}
+        ${s.status==='published'?`<button class="s d" onclick="setSt('${s.id}','draft')">আনপাবলিশ</button>`:''}
+      </div>
+      <div id="pk_${s.id}" hidden style="margin-top:8px"></div>
+    </div>`).join(''):'<div class="card sub">কিছু নেই।</div>';
+}
+async function peek(id){
+  const d=$('#pk_'+id);if(!d.hidden){d.hidden=true;return}
+  const {data,error}=await sb.from('questions').select('*').eq('quiz_id',id).order('position');
+  if(error)return fail(error);
+  d.innerHTML=data.map((q,i)=>`<div class="item"><div class="num">${i+1}</div><div class="grow">
+    <div>${esc(q.question)}</div>
+    ${['A','B','C','D'].map(L=>`<div class="sub" style="${q.answer===L?'color:var(--acc);font-weight:600':''}">${L}. ${esc(q['option_'+L.toLowerCase()])}</div>`).join('')}
+    <div class="sub">ব্যাখ্যা: ${esc(q.explanation)}</div></div></div>`).join('')||'<div class="sub">প্রশ্ন নেই</div>';
+  d.hidden=false;
+}
+async function setSt(id,s,note=null){
+  const {error}=await sb.from('quiz_sets').update({status:s,review_note:note}).eq('id',id);
+  if(error)return fail(error);toast('হয়েছে');loadSets();
+}
+function reject(id){
+  const n=prompt('ফেরত দেওয়ার কারণ (এডিটর দেখতে পাবে)');if(n===null)return;
+  setSt(id,'rejected',n.trim()||null);
+}
+
+// ---------- ইউজার ----------
+const R={pending:'অনুমোদনের অপেক্ষায়',editor:'এডিটর',admin:'অ্যাডমিন',blocked:'বন্ধ'};
+async function loadUsers(){
+  const {data,error}=await sb.from('profiles').select('*').order('created_at',{ascending:false});
+  if(error)return fail(error);
+  data.sort((a,b)=>(b.role==='pending')-(a.role==='pending'));
+  $('#ulist').innerHTML=data.map(u=>`
+    <div class="card row"><div class="grow"><b>${esc(u.email)}</b><div class="sub">${R[u.role]}</div></div>
+    ${u.role==='admin'?'':u.role==='editor'
+      ?`<button class="s d" onclick="setRole('${u.id}','blocked')">বন্ধ করুন</button>`
+      :`<button class="s p" onclick="setRole('${u.id}','editor')">অনুমোদন</button>${u.role==='pending'?`<button class="s d" onclick="setRole('${u.id}','blocked')">বাতিল</button>`:''}`}
+    </div>`).join('');
+}
+async function setRole(id,r){
+  const {error}=await sb.from('profiles').update({role:r}).eq('id',id);
+  if(error)return fail(error);toast('হয়েছে');loadUsers();pend();
+}
+init();
+</script>
+</body>
+</html>
